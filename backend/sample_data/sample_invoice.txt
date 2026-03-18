@@ -1,0 +1,42 @@
+TAX INVOICE
+
+Invoice No: INV-2024-001
+Date: 01/10/2024
+
+From:
+ABC Traders
+GSTIN: 27AABCU9603R1ZM
+Address: 123 Business Park, Mumbai, Maharashtra - 400001
+Phone: +91-9876543210
+Email: contact@abctraders.com
+
+To:
+XYZ Industries
+GSTIN: 29ABCDE1234F1Z5
+Address: 456 Industrial Area, Bangalore, Karnataka - 560001
+
+Description                    Qty    Rate      Amount
+------------------------------------------------------
+Office Supplies                10     500       5,000
+Stationery Items               5      200       1,000
+
+                                        Subtotal: 6,000
+                           CGST @ 9% (540):   540
+                           SGST @ 9% (540):   540
+                                   Total GST: 1,080
+
+                                Grand Total: Rs. 7,080
+
+Bank Details:
+Account Name: ABC Traders
+Account No: 1234567890
+IFSC: HDFC0001234
+Bank: HDFC Bank, Mumbai
+
+Terms & Conditions:
+1. Payment within 30 days
+2. Interest @ 18% p.a. will be charged on delayed payment
+3. Subject to Mumbai jurisdiction
+
+Authorized Signatory
+ABC Traders

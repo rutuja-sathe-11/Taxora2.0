@@ -1,0 +1,36 @@
+# Python
+__pycache__/
+*.pyc
+*.pyd
+*.pyo
+
+# Virtual environment
+venv/
+env/
+backend/venv/
+
+# ML model/checkpoint files
+*.pt
+*.pth
+*.ckpt
+*.h5
+*.onnx
+*.tflite
+
+# Torch large libs
+*.dll
+*.lib
+
+# Logs
+*.log
+
+# Node (if frontend)
+node_modules/
+
+# IDE files
+.vscode/
+.idea/
+
+# Build
+dist/
+build/

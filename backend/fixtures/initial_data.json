@@ -1,0 +1,73 @@
+[
+  {
+    "model": "transactions.transactioncategory",
+    "pk": 1,
+    "fields": {
+      "name": "Office Expenses",
+      "description": "Office supplies, rent, utilities",
+      "is_expense_category": true,
+      "gst_applicable": true,
+      "default_gst_rate": "18.00"
+    }
+  },
+  {
+    "model": "transactions.transactioncategory",
+    "pk": 2,
+    "fields": {
+      "name": "Professional Services",
+      "description": "Consulting, legal, accounting fees",
+      "is_expense_category": false,
+      "gst_applicable": true,
+      "default_gst_rate": "18.00"
+    }
+  },
+  {
+    "model": "transactions.transactioncategory",
+    "pk": 3,
+    "fields": {
+      "name": "Travel Expenses",
+      "description": "Business travel, accommodation",
+      "is_expense_category": true,
+      "gst_applicable": true,
+      "default_gst_rate": "12.00"
+    }
+  },
+  {
+    "model": "compliance.compliancerule",
+    "pk": 1,
+    "fields": {
+      "name": "GSTR-3B Filing",
+      "rule_type": "gst_filing",
+      "description": "Monthly GST return filing",
+      "conditions": {"turnover_threshold": 4000000},
+      "consequences": "Late fees and penalties",
+      "due_period": "monthly",
+      "created_at": "2024-01-01T00:00:00Z"
+    }
+  },
+  {
+    "model": "compliance.compliancerule",
+    "pk": 2,
+    "fields": {
+      "name": "ITR Filing",
+      "rule_type": "itr_filing", 
+      "description": "Annual Income Tax Return filing",
+      "conditions": {"income_threshold": 250000},
+      "consequences": "Late fees and interest",
+      "due_period": "yearly",
+      "created_at": "2024-01-02T00:00:00Z"
+    }
+  },
+  {
+    "model": "ai_services.aimodel",
+    "pk": 1,
+    "fields": {
+      "name": "Tesseract OCR",
+      "version": "5.0",
+      "model_type": "OCR",
+      "configuration": {"language": "eng", "psm": 6},
+      "performance_metrics": {"accuracy": 0.85},
+      "created_at": "2024-01-03T00:00:00Z"
+    }
+  }
+]
