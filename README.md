@@ -1,3 +1,4 @@
+<<<<<<< HEAD
 # Taxora - AI-Powered Accounting & Compliance Platform
 
 A comprehensive full-stack platform for SMEs, Freelancers, and Chartered Accountants with AI-powered invoice processing, compliance tracking, and tax advisory features.
@@ -397,3 +398,4 @@ For support and questions:
 ---
 
 **Taxora** - Simplifying accounting and compliance with AI 🚀
+
