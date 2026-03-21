@@ -39,3 +39,14 @@ dist/
 backend/.env
 frontend/.env
 build/
+# Python virtual environment
+backend/venv/
+
+# Environment variables
+backend/.env
+
+# Database
+backend/db.sqlite3
+
+# Uploads
+backend/uploads/
