@@ -1,4 +1,4 @@
-import React, { useState } from 'react'
+import React, { useEffect, useState } from 'react'
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
@@ -53,13 +53,21 @@ export const TaxFilingAssistant: React.FC = () => {
     taxPaid: ''
   })
   const [itrResult, setItrResult] = useState<TaxCalculation | null>(null)
+  const [itrPayload, setItrPayload] = useState<any>(null)
 
   // TDS Form State
   const [tdsForm, setTdsForm] = useState({
-    paymentType: 'professional_services',
+    paymentType: '194J',
     amount: '',
     panAvailable: true
   })
+  const [tdsResult, setTdsResult] = useState<any>(null)
+
+  useEffect(() => {
+    if (selectedClient === 'all' && clients.length > 0) {
+      setSelectedClient(String(clients[0].id))
+    }
+  }, [clients, selectedClient])
 
   const handleGSTCalculation = async () => {
     if (!gstForm.taxableAmount || !gstForm.gstRate) return
@@ -115,78 +123,49 @@ export const TaxFilingAssistant: React.FC = () => {
 
   const handleITRCalculation = async () => {
     if (!itrForm.incomeAmount) return
+    if (selectedClient === 'all') {
+      alert('Please select a client for ITR calculation')
+      return
+    }
 
     setLoading(true)
     try {
-      const clientId = selectedClient !== 'all' ? selectedClient : undefined
-      const result = await complianceService.calculateTax({
-        income_amount: parseFloat(itrForm.incomeAmount),
-        calculation_type: 'income_tax',
+      const result = await complianceService.calculateITR({
+        client_id: selectedClient,
         assessment_year: itrForm.assessmentYear,
+        salary_income: parseFloat(itrForm.incomeAmount) || 0,
+        business_income: 0,
+        other_income: 0,
         deductions_80c: parseFloat(itrForm.deductions80c) || 0,
         deductions_80d: parseFloat(itrForm.deductions80d) || 0,
-        other_deductions: parseFloat(itrForm.otherDeductions) || 0
-      }, clientId)
+        deductions_other: parseFloat(itrForm.otherDeductions) || 0,
+        tds_paid: parseFloat(itrForm.taxPaid) || 0,
+      })
       
-      // Transform API response from snake_case to camelCase
+      setItrPayload(result)
+
       const transformedResult: TaxCalculation = {
-        grossIncome: result.gross_income ?? result.grossIncome ?? 0,
-        totalDeductions: result.total_deductions ?? result.totalDeductions ?? 0,
+        grossIncome: Number(result.total_income ?? 0),
+        totalDeductions: Number(result.deductions?.total_deductions ?? 0),
         taxableIncome: result.taxable_income ?? result.taxableIncome ?? 0,
-        incomeTax: result.income_tax ?? result.incomeTax ?? 0,
-        healthCess: result.health_cess ?? result.healthCess ?? 0,
-        totalTaxLiability: result.total_tax_liability ?? result.totalTaxLiability ?? 0,
-        effectiveTaxRate: result.effective_tax_rate ?? result.effectiveTaxRate ?? 0
+        incomeTax: Number(result.tax_payable ?? 0),
+        healthCess: 0,
+        totalTaxLiability: Number(result.tax_payable ?? 0),
+        effectiveTaxRate: Number(result.total_income ?? 0) > 0
+          ? (Number(result.tax_payable ?? 0) / Number(result.total_income ?? 0)) * 100
+          : 0
       }
       setItrResult(transformedResult)
     } catch (error) {
       console.error('Error calculating tax:', error)
-      // Fallback calculation with proper number validation
-      const grossIncome = parseFloat(itrForm.incomeAmount) || 0
-      const deductions80c = Math.min(parseFloat(itrForm.deductions80c) || 0, 150000)
-      const deductions80d = parseFloat(itrForm.deductions80d) || 0
-      const otherDeductions = parseFloat(itrForm.otherDeductions) || 0
-      
-      if (grossIncome <= 0) {
-        alert('Please enter a valid income amount')
-        setLoading(false)
-        return
-      }
-      
-      const totalDeductions = deductions80c + deductions80d + otherDeductions
-      const taxableIncome = Math.max(0, grossIncome - totalDeductions)
-      
-      // Simple tax calculation (FY 2023-24 rates)
-      let incomeTax = 0
-      if (taxableIncome > 1000000) {
-        incomeTax = 112500 + (taxableIncome - 1000000) * 0.3
-      } else if (taxableIncome > 500000) {
-        incomeTax = 12500 + (taxableIncome - 500000) * 0.2
-      } else if (taxableIncome > 250000) {
-        incomeTax = (taxableIncome - 250000) * 0.05
-      }
-      
-      const healthCess = incomeTax * 0.04
-      const totalTaxLiability = incomeTax + healthCess
-      const effectiveTaxRate = grossIncome > 0 ? (totalTaxLiability / grossIncome) * 100 : 0
-      
-      const fallbackResult: TaxCalculation = {
-        grossIncome: Number(grossIncome.toFixed(2)),
-        totalDeductions: Number(totalDeductions.toFixed(2)),
-        taxableIncome: Number(taxableIncome.toFixed(2)),
-        incomeTax: Number(incomeTax.toFixed(2)),
-        healthCess: Number(healthCess.toFixed(2)),
-        totalTaxLiability: Number(totalTaxLiability.toFixed(2)),
-        effectiveTaxRate: Number(effectiveTaxRate.toFixed(2))
-      }
-      setItrResult(fallbackResult)
+      alert('Error calculating ITR from backend. Please check input and try again.')
     } finally {
       setLoading(false)
     }
   }
 
   const handleFileITR = async () => {
-    if (!itrResult) {
+    if (!itrResult || !itrPayload) {
       alert('Please calculate tax first before filing ITR')
       return
     }
@@ -198,55 +177,33 @@ export const TaxFilingAssistant: React.FC = () => {
 
     setLoading(true)
     try {
-      // Calculate due date (typically July 31st of the assessment year)
-      const assessmentYear = itrForm.assessmentYear
-      const year = parseInt(assessmentYear.split('-')[0])
-      const dueDate = new Date(year, 6, 31) // July 31st (month is 0-indexed)
-      
-      const filingData = {
-        assessment_year: assessmentYear,
-        itr_form: itrForm.itrFormType,
-        due_date: dueDate.toISOString().split('T')[0],
-        status: 'draft',
-        gross_total_income: itrResult.grossIncome,
-        total_deductions: itrResult.totalDeductions,
-        taxable_income: itrResult.taxableIncome,
-        tax_computed: itrResult.totalTaxLiability,
-        tax_paid: parseFloat(itrForm.taxPaid) || 0,
-        refund_amount: Math.max(0, (parseFloat(itrForm.taxPaid) || 0) - itrResult.totalTaxLiability)
-      }
-
-      const result = await complianceService.fileITR(filingData)
-      
-      // Create a downloadable JSON file with ITR data
-      const dataStr = JSON.stringify({
-        ...filingData,
-        acknowledgment_number: result.acknowledgment_number || 'Pending',
-        filing_id: result.id,
-        calculated_at: new Date().toISOString()
-      }, null, 2)
+      const dataStr = JSON.stringify(itrPayload.itr_json || itrPayload, null, 2)
       const dataBlob = new Blob([dataStr], { type: 'application/json' })
       const url = URL.createObjectURL(dataBlob)
       const a = document.createElement('a')
       a.href = url
-      a.download = `itr-${assessmentYear}-${itrForm.itrFormType}.json`
+      a.download = `itr-${itrForm.assessmentYear}-${itrForm.itrFormType}.json`
       a.click()
       URL.revokeObjectURL(url)
       
-      alert(`ITR ${itrForm.itrFormType} for ${assessmentYear} has been filed successfully!`)
+      alert(`ITR JSON generated successfully for ${itrForm.assessmentYear}`)
     } catch (error) {
-      console.error('Error filing ITR:', error)
-      alert('Error filing ITR. Please try again.')
+      console.error('Error generating ITR JSON:', error)
+      alert('Error generating ITR JSON. Please try again.')
     } finally {
       setLoading(false)
     }
   }
 
   const handleGenerateGSTR3B = async () => {
+    if (selectedClient === 'all') {
+      alert('Please select a client to generate GSTR-3B')
+      return
+    }
+
     setLoading(true)
     try {
-      const clientId = selectedClient !== 'all' ? selectedClient : undefined
-      const result = await complianceService.generateGSTR3B(gstForm.period, clientId)
+      const result = await complianceService.generateClientGSTR3B(selectedClient, gstForm.period)
       console.log('GSTR-3B Data:', result)
       
       // Create a downloadable JSON file with GST data
@@ -262,49 +219,7 @@ export const TaxFilingAssistant: React.FC = () => {
       alert('GSTR-3B data generated and downloaded successfully!')
     } catch (error) {
       console.error('Error generating GSTR-3B:', error)
-      // Generate mock GSTR-3B data
-      const mockGSTR3B = {
-        period: gstForm.period,
-        gstin: "27AABCU9603R1ZX",
-        business_name: "Sample Business",
-        outward_supplies: {
-          taxable_value: 100000,
-          cgst: 9000,
-          sgst: 9000,
-          igst: 0,
-          cess: 0
-        },
-        inward_supplies: {
-          taxable_value: 50000,
-          cgst: 4500,
-          sgst: 4500,
-          igst: 0,
-          cess: 0
-        },
-        input_tax_credit: {
-          cgst: 4500,
-          sgst: 4500,
-          igst: 0,
-          cess: 0
-        },
-        net_tax_payable: {
-          cgst: 4500,
-          sgst: 4500,
-          igst: 0,
-          cess: 0
-        }
-      }
-      
-      const dataStr = JSON.stringify(mockGSTR3B, null, 2)
-      const dataBlob = new Blob([dataStr], { type: 'application/json' })
-      const url = URL.createObjectURL(dataBlob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `gstr3b-${gstForm.period}.json`
-      a.click()
-      URL.revokeObjectURL(url)
-      
-      alert('GSTR-3B data generated with sample data!')
+      alert('Error generating GSTR-3B. Please ensure transactions exist for selected period.')
     } finally {
       setLoading(false)
     }
@@ -312,14 +227,43 @@ export const TaxFilingAssistant: React.FC = () => {
 
   const getTDSRate = (paymentType: string, panAvailable: boolean) => {
     const rates: { [key: string]: { withPAN: number; withoutPAN: number } } = {
-      professional_services: { withPAN: 10, withoutPAN: 20 },
-      rent: { withPAN: 10, withoutPAN: 20 },
-      commission: { withPAN: 5, withoutPAN: 20 },
-      interest: { withPAN: 10, withoutPAN: 20 }
+      '194J': { withPAN: 10, withoutPAN: 20 },
+      '194C': { withPAN: 1, withoutPAN: 20 },
+      '194H': { withPAN: 5, withoutPAN: 20 },
+      '194I': { withPAN: 10, withoutPAN: 20 },
+      '194A': { withPAN: 10, withoutPAN: 20 }
     }
     
-    const rate = rates[paymentType] || rates.professional_services
+    const rate = rates[paymentType] || rates['194J']
     return panAvailable ? rate.withPAN : rate.withoutPAN
+  }
+
+  const handleTDSCalculation = async () => {
+    if (selectedClient === 'all') {
+      alert('Please select a client for TDS calculation')
+      return
+    }
+    if (!tdsForm.amount || Number(tdsForm.amount) <= 0) {
+      alert('Please enter a valid payment amount')
+      return
+    }
+
+    setLoading(true)
+    try {
+      const result = await complianceService.calculateTDS({
+        client_id: selectedClient,
+        payment_type: tdsForm.paymentType,
+        amount: Number(tdsForm.amount),
+        pan_available: tdsForm.panAvailable,
+      })
+      setTdsResult(result)
+      alert('TDS calculated and saved successfully')
+    } catch (error) {
+      console.error('Error calculating TDS:', error)
+      alert('Error calculating TDS from backend')
+    } finally {
+      setLoading(false)
+    }
   }
 
   const calculateTDS = () => {
@@ -689,10 +633,11 @@ export const TaxFilingAssistant: React.FC = () => {
                 onChange={(e) => setTdsForm(prev => ({ ...prev, paymentType: e.target.value }))}
                 className="w-full px-3 py-2 bg-gray-800 border border-gray-600 rounded-md text-white focus:outline-none focus:ring-2 focus:ring-blue-500"
               >
-                <option value="professional_services">Professional Services</option>
-                <option value="rent">Rent</option>
-                <option value="commission">Commission</option>
-                <option value="interest">Interest</option>
+                <option value="194J">194J - Professional Services</option>
+                <option value="194C">194C - Contractor</option>
+                <option value="194H">194H - Commission</option>
+                <option value="194I">194I - Rent</option>
+                <option value="194A">194A - Interest</option>
               </select>
             </div>
 
@@ -739,6 +684,19 @@ export const TaxFilingAssistant: React.FC = () => {
                 </span>
               </div>
             </div>
+
+            <Button onClick={handleTDSCalculation} disabled={loading} className="w-full">
+              {loading ? 'Saving...' : 'Calculate & Save TDS'}
+            </Button>
+
+            {tdsResult && (
+              <div className="bg-blue-500/10 border border-blue-500/20 rounded-lg p-3 text-sm">
+                <p className="text-white">Saved Record #{tdsResult.record_id}</p>
+                <p className="text-gray-300">Section: {tdsResult.section}</p>
+                <p className="text-gray-300">Rate: {tdsResult.tds_rate}%</p>
+                <p className="text-gray-300">TDS Deducted: {formatCurrency(Number(tdsResult.tds_deducted || 0))}</p>
+              </div>
+            )}
           </CardContent>
         </Card>
 
@@ -823,7 +781,7 @@ export const TaxFilingAssistant: React.FC = () => {
             >
               <option value="all">All Clients</option>
               {clients.map(client => (
-                <option key={client.id} value={client.id}>
+                <option key={String(client.id)} value={String(client.id)}>
                   {client.businessName} ({client.name})
                 </option>
               ))}

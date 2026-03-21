@@ -1,0 +1,18 @@
+{
+  "client_id": 1,
+  "period": "2026-03",
+  "outward_supplies": {
+    "taxable_value": 0,
+    "output_tax": 0
+  },
+  "inward_supplies": {
+    "taxable_value": 0,
+    "input_tax": 0
+  },
+  "tax_liability": {
+    "output_tax": 0,
+    "input_tax_credit": 0,
+    "net_tax_payable": 0
+  },
+  "transaction_count": 0
+}

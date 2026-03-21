@@ -174,6 +174,11 @@ export const aiAPI = {
   chat: (data: any) =>
     api.post('/ai/chat/', data),
 
+  ragChat: (data: FormData) =>
+    api.post('/ai/chat/rag/', data, {
+      headers: { 'Content-Type': 'multipart/form-data' },
+    }),
+
   chatSessions: () =>
     api.get('/ai/chat/sessions/'),
 
@@ -223,6 +228,67 @@ export const complianceAPI = {
 
   generateGSTR3B: (period: string, clientId?: string) =>
     api.post('/compliance/generate-gstr3b/', { period, client_id: clientId }),
+
+  // New GST module endpoints
+  gstTransactions: (params?: any) =>
+    api.get('/compliance/gst/transactions/', { params }),
+
+  addGSTTransaction: (data: any) =>
+    api.post('/compliance/gst/transactions/', data),
+
+  gstClientTransactions: (clientId: string) =>
+    api.get(`/compliance/gst/transactions/${clientId}/`),
+
+  gstCalculateByClient: (clientId: string) =>
+    api.get(`/compliance/gst/calculate/${clientId}/`),
+
+  gstGstr3bByClient: (clientId: string, period?: string) =>
+    api.get(`/compliance/gst/gstr3b/${clientId}/`, {
+      params: period ? { period } : undefined,
+    }),
+
+  // New ITR module endpoints
+  itrCalculate: (data: any) =>
+    api.post('/compliance/itr/calculate/', data),
+
+  itrRecordsByClient: (clientId: string) =>
+    api.get(`/compliance/itr/records/${clientId}/`),
+
+  itrSummary: (recordId: string | number) =>
+    api.get(`/compliance/itr/summary/${recordId}/`),
+
+  // New TDS module endpoints
+  tdsCalculate: (data: any) =>
+    api.post('/compliance/tds/calculate/', data),
+
+  tdsByClient: (clientId: string) =>
+    api.get(`/compliance/tds/${clientId}/`),
+
+  // Reports and sharing endpoints
+  pnlReport: (clientId: string) =>
+    api.get(`/compliance/reports/pnl/${clientId}/`),
+
+  reportsByClient: (clientId: string) =>
+    api.get(`/compliance/reports/${clientId}/`),
+
+  sendMessage: (data: any) =>
+    api.post('/compliance/messages/send/', data, {
+      headers: data instanceof FormData ? { 'Content-Type': 'multipart/form-data' } : undefined,
+    }),
+
+  messagesByClient: (clientId: string) =>
+    api.get(`/compliance/messages/${clientId}/`),
+
+  notices: (params?: any) =>
+    api.get('/compliance/notices/', { params }),
+
+  createNotice: (data: FormData | any) =>
+    api.post('/compliance/notices/', data, {
+      headers: data instanceof FormData ? { 'Content-Type': 'multipart/form-data' } : undefined,
+    }),
+
+  updateNotice: (id: number | string, data: any) =>
+    api.patch(`/compliance/notices/${id}/`, data),
 }
 
 export const clientAPI = {

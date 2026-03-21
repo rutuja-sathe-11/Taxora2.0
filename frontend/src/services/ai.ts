@@ -26,51 +26,75 @@ class AIService {
     }
   }
 
-  async chatWithAI(message: string, context?: any): Promise<string> {
-    try {
-      const response = await aiAPI.chat({
-        message,
-        session_id: context?.sessionId,
-        context_documents: context?.documents || [],
-        context_transactions: context?.transactions || []
-      })
+  private formatAIResponse(raw: any): string {
+    const aiResponse = raw?.ai_response?.content || raw?.ai_response || raw?.analysis || 'OK'
 
-      const aiResponse = response.data.ai_response?.content || response.data.ai_response || response.data.analysis || 'OK'
-      
-      // Try to parse JSON response and extract formatted content
-      try {
-        const parsedResponse = JSON.parse(aiResponse)
-        if (parsedResponse.title && parsedResponse.advice) {
-          // Format the response with title, summary, and advice
-          let formattedResponse = `# ${parsedResponse.title}\n\n`
-          if (parsedResponse.summary) {
-            formattedResponse += `**Summary:** ${parsedResponse.summary}\n\n`
-          }
-          formattedResponse += parsedResponse.advice
-          if (parsedResponse.disclaimer) {
-            // Clean up disclaimer text if it contains JSON artifacts
-            let disclaimer = parsedResponse.disclaimer
-            if (typeof disclaimer === 'string' && disclaimer.includes('"disclaimer":')) {
-              // Extract just the disclaimer text from JSON-like string
-              const match = disclaimer.match(/"disclaimer":\s*"([^"]+)"/)
-              if (match) {
-                disclaimer = match[1]
-              }
-            }
-            formattedResponse += `\n\n---\n\n*${disclaimer}*`
-          }
-          return formattedResponse
+    try {
+      const parsedResponse = JSON.parse(aiResponse)
+      if (parsedResponse.title && parsedResponse.advice) {
+        let formattedResponse = `# ${parsedResponse.title}\n\n`
+        if (parsedResponse.summary) {
+          formattedResponse += `**Summary:** ${parsedResponse.summary}\n\n`
         }
-      } catch (parseError) {
-        // If not JSON, return as is
-        console.log('Response is not JSON, returning as plain text')
+        formattedResponse += parsedResponse.advice
+        if (parsedResponse.disclaimer) {
+          let disclaimer = parsedResponse.disclaimer
+          if (typeof disclaimer === 'string' && disclaimer.includes('"disclaimer":')) {
+            const match = disclaimer.match(/"disclaimer":\s*"([^"]+)"/)
+            if (match) {
+              disclaimer = match[1]
+            }
+          }
+          formattedResponse += `\n\n---\n\n*${disclaimer}*`
+        }
+        return formattedResponse
       }
-      
-      return aiResponse
+    } catch {
+      // plain text
+    }
+
+    return aiResponse
+  }
+
+  async chatWithAIWithMeta(message: string, context?: any): Promise<{ content: string; sessionId?: string }> {
+    try {
+      let response
+
+      if (context?.ragFile instanceof File) {
+        const formData = new FormData()
+        formData.append('message', message)
+        if (context?.sessionId) {
+          formData.append('session_id', context.sessionId)
+        }
+        formData.append('rag_file', context.ragFile)
+        response = await aiAPI.ragChat(formData)
+      } else if (context?.sessionId) {
+        const formData = new FormData()
+        formData.append('message', message)
+        formData.append('session_id', context.sessionId)
+        response = await aiAPI.ragChat(formData)
+      } else {
+        response = await aiAPI.chat({
+          message,
+          session_id: context?.sessionId,
+          context_documents: context?.documents || [],
+          context_transactions: context?.transactions || []
+        })
+      }
+
+      return {
+        content: this.formatAIResponse(response.data),
+        sessionId: response.data?.session_id,
+      }
     } catch (error) {
       console.error('Error chatting with AI:', error)
       throw new Error('Failed to get AI response')
     }
+  }
+
+  async chatWithAI(message: string, context?: any): Promise<string> {
+    const result = await this.chatWithAIWithMeta(message, context)
+    return result.content
   }
 
   async generateDocumentSummary(document: Document): Promise<string> {

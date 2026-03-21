@@ -3,6 +3,7 @@ from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from rest_framework_simplejwt.tokens import RefreshToken
 from django.contrib.auth import get_user_model
+from django.db.models import Q
 from django.utils.http import urlsafe_base64_encode, urlsafe_base64_decode
 from django.utils.encoding import force_bytes, force_str
 from django.contrib.auth.tokens import default_token_generator
@@ -295,12 +296,16 @@ def remove_client(request, client_id):
                        status=status.HTTP_403_FORBIDDEN)
     
     try:
-        # Get the client relationship
-        relationship = ClientRelationship.objects.get(
-            ca=request.user,
-            sme_id=client_id,
-            is_active=True
-        )
+        # Support both SME id and relationship id
+        relationship = ClientRelationship.objects.filter(
+            ca=request.user
+        ).filter(
+            Q(sme_id=client_id) | Q(id=client_id)
+        ).first()
+
+        if not relationship:
+            return Response({'error': 'Client relationship not found'}, 
+                           status=status.HTTP_404_NOT_FOUND)
         
         # Deactivate the relationship instead of deleting it
         relationship.is_active = False
@@ -319,11 +324,11 @@ def remove_client(request, client_id):
         )
         
         return Response({'message': 'Client removed successfully'})
-    
-    except ClientRelationship.DoesNotExist:
-        return Response({'error': 'Client relationship not found'}, 
-                       status=status.HTTP_404_NOT_FOUND)
 
+    except Exception as e:
+        return Response({'error': f'Error removing client: {str(e)}'},
+                       status=status.HTTP_400_BAD_REQUEST)
+    
 @api_view(['PUT', 'PATCH'])
 @permission_classes([permissions.IsAuthenticated])
 def update_client(request, client_id):
@@ -333,21 +338,28 @@ def update_client(request, client_id):
                        status=status.HTTP_403_FORBIDDEN)
     
     try:
-        # Get the client relationship
-        relationship = ClientRelationship.objects.get(
-            ca=request.user,
-            sme_id=client_id,
-            is_active=True
-        )
+        # Support both SME id and relationship id; include inactive so status can be reactivated
+        relationship = ClientRelationship.objects.filter(
+            ca=request.user
+        ).filter(
+            Q(sme_id=client_id) | Q(id=client_id)
+        ).first()
+
+        if not relationship:
+            return Response({'error': 'Client relationship not found'}, 
+                           status=status.HTTP_404_NOT_FOUND)
         
         sme_user = relationship.sme
         
         # Update user fields
         if 'name' in request.data:
-            name = request.data.get('name')
+            name = (request.data.get('name') or '').strip()
             name_parts = name.split(' ', 1)
             sme_user.first_name = name_parts[0] if name_parts else ''
             sme_user.last_name = name_parts[1] if len(name_parts) > 1 else ''
+
+        if 'email' in request.data:
+            sme_user.email = (request.data.get('email') or '').strip()
         
         if 'businessName' in request.data:
             sme_user.business_name = request.data.get('businessName')
@@ -424,9 +436,6 @@ def update_client(request, client_id):
             'client': serializer.data
         })
     
-    except ClientRelationship.DoesNotExist:
-        return Response({'error': 'Client relationship not found'}, 
-                       status=status.HTTP_404_NOT_FOUND)
     except Exception as e:
         return Response({'error': f'Error updating client: {str(e)}'}, 
                        status=status.HTTP_400_BAD_REQUEST)

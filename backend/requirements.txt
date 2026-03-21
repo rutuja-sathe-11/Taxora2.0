@@ -9,7 +9,8 @@ groq==0.4.1
 python-dotenv==1.0.0
 requests==2.31.0
 pdfplumber==0.11.4
-setuptools>=74.1.2
+# setuptools>=74.1.2
+setuptools==69.5.1
 drf-nested-routers==0.93.4
 
 # Optional but recommended for full AI/OCR feature set

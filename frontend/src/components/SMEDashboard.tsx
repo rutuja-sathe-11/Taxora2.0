@@ -1,13 +1,12 @@
 import React, { useState, useEffect } from 'react'
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card'
 import { Button } from './ui/button'
-import { ArrowUpRight, ArrowDownRight, TrendingUp, AlertTriangle, Target, Calendar, FileText, Calculator, CheckCircle } from 'lucide-react'
+import { ArrowUpRight, ArrowDownRight, TrendingUp, AlertTriangle, Target, Calendar, FileText, Calculator, CheckCircle, MessageSquare, Users } from 'lucide-react'
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell } from 'recharts'
 import { formatCurrency } from '../lib/utils'
 import { AIInsight } from '../types'
 import { aiService } from '../services/ai'
 import { transactionService } from '../services/transactions'
-import { complianceService } from '../services/compliance'
 
 export const SMEDashboard: React.FC = () => {
   const [insights, setInsights] = useState<AIInsight[]>([])
@@ -83,48 +82,10 @@ export const SMEDashboard: React.FC = () => {
     ? parseAmount(summary.net_profit)
     : (totalIncome - totalExpenses)
 
-  const handleFileGSTReturn = async () => {
-    try {
-      // Navigate to GST filing or show GST filing modal
-      const gstData = await complianceService.generateGSTR3B(new Date().toISOString().slice(0, 7))
-      console.log('GST Return data:', gstData)
-      // You could show a modal or navigate to a dedicated GST filing page
-      alert('GST Return data prepared. Check console for details.')
-    } catch (error) {
-      console.error('Error preparing GST return:', error)
-      alert('Error preparing GST return. Please try again.')
-    }
-  }
-
-  const handleTaxPlanning = () => {
-    // Navigate to tax planning page or show tax planning modal
-    alert('Tax Planning feature - showing tax optimization suggestions')
-  }
-
-  const handleComplianceCheck = async () => {
-    try {
-      const complianceData = await complianceService.getComplianceScore()
-      alert(`Compliance Score: ${complianceData.overall_score}/100`)
-    } catch (error) {
-      console.error('Error checking compliance:', error)
-      alert('Error checking compliance. Please try again.')
-    }
-  }
-
-  const handleGenerateReport = async () => {
-    try {
-      const blob = await transactionService.exportTransactions()
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = 'financial-report.csv'
-      a.click()
-      URL.revokeObjectURL(url)
-    } catch (error) {
-      console.error('Error generating report:', error)
-      alert('Error generating report. Please try again.')
-    }
-  }
+  const handleGoToScan = () => window.dispatchEvent(new CustomEvent('navigate', { detail: 'scan' }))
+  const handleGoToDocuments = () => window.dispatchEvent(new CustomEvent('navigate', { detail: 'documents' }))
+  const handleGoToCAConnect = () => window.dispatchEvent(new CustomEvent('navigate', { detail: 'ca-connect' }))
+  const handleGoToChat = () => window.dispatchEvent(new CustomEvent('navigate', { detail: 'chat' }))
 
   return (
     <div className="space-y-8">
@@ -292,35 +253,35 @@ export const SMEDashboard: React.FC = () => {
       {/* Quick Actions */}
       <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
         <Button 
-          onClick={handleFileGSTReturn}
+          onClick={handleGoToScan}
           className="h-16 flex flex-col items-center justify-center space-y-1"
         >
-          <Calendar className="w-5 h-5" />
-          <span className="text-sm">File GST Return</span>
+          <FileText className="w-5 h-5" />
+          <span className="text-sm">Scan Invoice</span>
         </Button>
         <Button 
-          onClick={handleGenerateReport}
+          onClick={handleGoToDocuments}
           variant="outline" 
           className="h-16 flex flex-col items-center justify-center space-y-1"
         >
           <FileText className="w-5 h-5" />
-          <span className="text-sm">Generate Report</span>
+          <span className="text-sm">Documents</span>
         </Button>
         <Button 
-          onClick={handleComplianceCheck}
+          onClick={handleGoToCAConnect}
           variant="outline" 
           className="h-16 flex flex-col items-center justify-center space-y-1"
         >
-          <AlertTriangle className="w-5 h-5" />
-          <span className="text-sm">Compliance Check</span>
+          <Users className="w-5 h-5" />
+          <span className="text-sm">CA Connect</span>
         </Button>
         <Button 
-          onClick={handleTaxPlanning}
+          onClick={handleGoToChat}
           variant="outline" 
           className="h-16 flex flex-col items-center justify-center space-y-1"
         >
-          <Calculator className="w-5 h-5" />
-          <span className="text-sm">Tax Planning</span>
+          <MessageSquare className="w-5 h-5" />
+          <span className="text-sm">Messages</span>
         </Button>
       </div>
     </div>

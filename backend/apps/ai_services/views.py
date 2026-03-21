@@ -2,16 +2,117 @@ from rest_framework import generics, status, permissions
 from rest_framework.decorators import api_view, permission_classes
 from rest_framework.response import Response
 from django.shortcuts import get_object_or_404
+from django.core.files.uploadedfile import UploadedFile
 from .models import ChatSession, ChatMessage, AIInsight
 from .serializers import (
     ChatSessionSerializer, ChatMessageSerializer, AIInsightSerializer,
-    ChatCreateSerializer
+    ChatCreateSerializer, RagChatCreateSerializer
 )
 from .ai_utils import ai_advisor
 from apps.users.models import AuditLog
 from apps.transactions.models import Transaction
 from apps.documents.models import Document
 import uuid
+import os
+import re
+import tempfile
+
+
+def _chunk_text(text: str, chunk_size: int = 700, overlap: int = 120):
+    if not text:
+        return []
+    text = re.sub(r'\s+', ' ', text).strip()
+    chunks = []
+    start = 0
+    n = len(text)
+    while start < n:
+        end = min(n, start + chunk_size)
+        chunks.append(text[start:end])
+        if end == n:
+            break
+        start = max(0, end - overlap)
+    return chunks
+
+
+def _tokens(text: str):
+    return set(re.findall(r'[a-zA-Z0-9]{3,}', (text or '').lower()))
+
+
+def _score_chunk(query_tokens, chunk: str):
+    if not query_tokens or not chunk:
+        return 0
+    chunk_tokens = _tokens(chunk)
+    if not chunk_tokens:
+        return 0
+    overlap = len(query_tokens.intersection(chunk_tokens))
+    return overlap
+
+
+def _extract_text_from_upload(uploaded: UploadedFile) -> str:
+    if not uploaded:
+        return ''
+
+    suffix = os.path.splitext(uploaded.name or '')[1]
+    try:
+        from .ai_utils import OCRProcessor
+        with tempfile.NamedTemporaryFile(delete=False, suffix=suffix) as tmp:
+            for chunk in uploaded.chunks():
+                tmp.write(chunk)
+            temp_path = tmp.name
+
+        try:
+            ocr = OCRProcessor()
+            return (ocr.extract_text(temp_path) or '').strip()
+        finally:
+            try:
+                os.remove(temp_path)
+            except Exception:
+                pass
+    except Exception:
+        # Safe fallback for plain text-like files
+        try:
+            uploaded.seek(0)
+            content = uploaded.read()
+            if isinstance(content, bytes):
+                return content.decode('utf-8', errors='ignore').strip()
+            return str(content).strip()
+        except Exception:
+            return ''
+
+
+def _build_rag_context_for_query(session: ChatSession, query: str, top_k: int = 4):
+    context_data = session.context_data or {}
+    rag_docs = context_data.get('rag_documents', [])
+    query_tokens = _tokens(query)
+
+    scored = []
+    for doc in rag_docs:
+        for idx, chunk in enumerate(doc.get('chunks', [])):
+            score = _score_chunk(query_tokens, chunk)
+            if score > 0:
+                scored.append({
+                    'score': score,
+                    'doc_title': doc.get('title', 'Uploaded Document'),
+                    'chunk_index': idx,
+                    'chunk': chunk,
+                })
+
+    scored.sort(key=lambda x: x['score'], reverse=True)
+    top = scored[:top_k]
+
+    # Fallback retrieval: if lexical overlap is low/none, still provide
+    # chunks from the latest uploaded document to keep answers document-grounded.
+    if not top and rag_docs:
+        latest_doc = rag_docs[-1]
+        for idx, chunk in enumerate((latest_doc.get('chunks') or [])[:top_k]):
+            top.append({
+                'score': 0,
+                'doc_title': latest_doc.get('title', 'Uploaded Document'),
+                'chunk_index': idx,
+                'chunk': chunk,
+            })
+
+    return top
 
 class ChatSessionListView(generics.ListCreateAPIView):
     serializer_class = ChatSessionSerializer
@@ -120,6 +221,131 @@ def chat_with_ai(request):
         })
     
     except Exception as e:
+        return Response(
+            {'error': 'Failed to get AI response. Please try again.'},
+            status=status.HTTP_500_INTERNAL_SERVER_ERROR
+        )
+
+
+@api_view(['POST'])
+@permission_classes([permissions.IsAuthenticated])
+def chat_with_ai_rag(request):
+    """Chat with AI advisor using uploaded document retrieval (RAG)."""
+    serializer = RagChatCreateSerializer(data=request.data)
+    if not serializer.is_valid():
+        return Response(serializer.errors, status=status.HTTP_400_BAD_REQUEST)
+
+    user = request.user
+    message_content = serializer.validated_data['message']
+    session_id = serializer.validated_data.get('session_id')
+    rag_file = serializer.validated_data.get('rag_file')
+
+    if session_id:
+        try:
+            session = ChatSession.objects.get(id=session_id, user=user)
+        except ChatSession.DoesNotExist:
+            session = ChatSession.objects.create(
+                user=user,
+                title=message_content[:50] + "..." if len(message_content) > 50 else message_content
+            )
+    else:
+        session = ChatSession.objects.create(
+            user=user,
+            title=message_content[:50] + "..." if len(message_content) > 50 else message_content
+        )
+
+    user_message = ChatMessage.objects.create(
+        session=session,
+        role='user',
+        content=message_content,
+        metadata={'rag_file_uploaded': bool(rag_file)}
+    )
+
+    context_data = session.context_data or {}
+    rag_docs = context_data.get('rag_documents', [])
+
+    uploaded_doc_info = None
+    if rag_file:
+        extracted_text = _extract_text_from_upload(rag_file)
+        chunks = _chunk_text(extracted_text)[:30]  # cap to keep session payload bounded
+        uploaded_doc_info = {
+            'doc_id': str(uuid.uuid4()),
+            'title': rag_file.name,
+            'chunks': chunks,
+        }
+        rag_docs.append(uploaded_doc_info)
+        context_data['rag_documents'] = rag_docs[-5:]  # keep latest 5 uploaded docs in session
+        session.context_data = context_data
+        session.save(update_fields=['context_data', 'updated_at'])
+
+    top_chunks = _build_rag_context_for_query(session, message_content, top_k=4)
+    rag_snippets = [
+        {
+            'source': item['doc_title'],
+            'snippet': item['chunk'][:450],
+            'score': item['score'],
+        }
+        for item in top_chunks
+    ]
+
+    ai_context = {
+        'user_info': {
+            'name': user.get_full_name(),
+            'business_name': user.business_name,
+            'role': user.role,
+        },
+        'rag_context': rag_snippets,
+        'rag_sources': list({item['source'] for item in rag_snippets}),
+    }
+
+    if uploaded_doc_info and not rag_snippets and uploaded_doc_info.get('chunks'):
+        ai_context['rag_context'] = [{
+            'source': uploaded_doc_info['title'],
+            'snippet': uploaded_doc_info['chunks'][0][:450],
+            'score': 1,
+        }]
+        ai_context['rag_sources'] = [uploaded_doc_info['title']]
+
+    try:
+        ai_response = ai_advisor.get_tax_advice(message_content, ai_context)
+
+        ai_message = ChatMessage.objects.create(
+            session=session,
+            role='assistant',
+            content=ai_response,
+            metadata={
+                'rag_used': bool(ai_context.get('rag_context')),
+                'rag_sources': ai_context.get('rag_sources', []),
+                'rag_matches': len(ai_context.get('rag_context', [])),
+            }
+        )
+
+        session.save()  # update updated_at
+
+        AuditLog.objects.create(
+            user=user,
+            action='CREATE',
+            resource='ai_rag_chat',
+            resource_id=str(session.id),
+            details={
+                'message_length': len(message_content),
+                'rag_used': bool(ai_context.get('rag_context')),
+                'rag_sources': ai_context.get('rag_sources', []),
+            }
+        )
+
+        return Response({
+            'session_id': str(session.id),
+            'user_message': ChatMessageSerializer(user_message).data,
+            'ai_response': ChatMessageSerializer(ai_message).data,
+            'rag': {
+                'used': bool(ai_context.get('rag_context')),
+                'sources': ai_context.get('rag_sources', []),
+                'matches': len(ai_context.get('rag_context', [])),
+            }
+        })
+
+    except Exception:
         return Response(
             {'error': 'Failed to get AI response. Please try again.'},
             status=status.HTTP_500_INTERNAL_SERVER_ERROR

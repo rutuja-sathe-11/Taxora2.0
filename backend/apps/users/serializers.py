@@ -136,15 +136,19 @@ class ClientRelationshipSerializer(serializers.ModelSerializer):
     
     def get_monthly_revenue(self, obj):
         from apps.transactions.models import Transaction
-        from django.utils import timezone
-        from datetime import timedelta
-        
-        month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-        income = Transaction.objects.filter(
+        income_qs = Transaction.objects.filter(
             user=obj.sme,
             type='income',
-            status='approved',
-            date__gte=month_start
+            status__in=['pending', 'flagged', 'approved'],
+        )
+
+        latest_income_date = income_qs.order_by('-date').values_list('date', flat=True).first()
+        if not latest_income_date:
+            return 0.0
+
+        income = income_qs.filter(
+            date__year=latest_income_date.year,
+            date__month=latest_income_date.month,
         ).aggregate(total=models.Sum('amount'))['total'] or 0
         
         return float(income)

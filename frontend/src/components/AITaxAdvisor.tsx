@@ -2,7 +2,7 @@ import React, { useState, useRef, useEffect } from 'react'
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card'
 import { Button } from './ui/button'
 import { Input } from './ui/input'
-import { Send, Bot, User, Lightbulb, FileText, Calculator, AlertTriangle, ChevronDown, ChevronUp } from 'lucide-react'
+import { Send, Bot, User, Lightbulb, FileText, Calculator, AlertTriangle, ChevronDown, ChevronUp, Paperclip, X } from 'lucide-react'
 import { aiService } from '../services/ai'
 import ReactMarkdown from 'react-markdown'
 
@@ -36,9 +36,12 @@ export const AITaxAdvisor: React.FC = () => {
   ])
   const [inputMessage, setInputMessage] = useState('')
   const [isTyping, setIsTyping] = useState(false)
+  const [selectedRagFile, setSelectedRagFile] = useState<File | null>(null)
+  const [sessionId, setSessionId] = useState<string | null>(null)
   const [expandedMessages, setExpandedMessages] = useState<Set<string>>(new Set())
   const messagesEndRef = useRef<HTMLDivElement>(null)
   const messagesContainerRef = useRef<HTMLDivElement>(null)
+  const ragFileInputRef = useRef<HTMLInputElement>(null)
   
   const MAX_RESPONSE_LENGTH = 800 // Characters to show before truncating
 
@@ -117,15 +120,21 @@ export const AITaxAdvisor: React.FC = () => {
     setIsTyping(true)
 
     try {
-      const response = await aiService.chatWithAI(content.trim(), {
+      const response = await aiService.chatWithAIWithMeta(content.trim(), {
         messages,
+        sessionId,
+        ragFile: selectedRagFile,
       })
+
+      if (response.sessionId) {
+        setSessionId(response.sessionId)
+      }
       
       // Truncate response if too long
-      let processedResponse = response
-      if (response.length > MAX_RESPONSE_LENGTH * 2) {
+      let processedResponse = response.content
+      if (response.content.length > MAX_RESPONSE_LENGTH * 2) {
         // If response is very long, truncate it more aggressively
-        const { truncated } = truncateContent(response, MAX_RESPONSE_LENGTH * 2)
+        const { truncated } = truncateContent(response.content, MAX_RESPONSE_LENGTH * 2)
         processedResponse = truncated
       }
 
@@ -138,6 +147,10 @@ export const AITaxAdvisor: React.FC = () => {
       }
 
       setMessages(prev => [...prev, assistantMessage])
+      setSelectedRagFile(null)
+      if (ragFileInputRef.current) {
+        ragFileInputRef.current.value = ''
+      }
     } catch (error) {
       console.error('Failed to get AI response:', error)
       
@@ -347,6 +360,26 @@ export const AITaxAdvisor: React.FC = () => {
               {/* Input Area */}
               <div className="border-t border-gray-700 p-4 bg-gray-900">
                 <div className="flex items-center space-x-2">
+                  <input
+                    ref={ragFileInputRef}
+                    type="file"
+                    className="hidden"
+                    accept=".pdf,.txt,.csv,.md,.png,.jpg,.jpeg"
+                    onChange={(e) => {
+                      const file = e.target.files?.[0]
+                      if (!file) return
+                      setSelectedRagFile(file)
+                    }}
+                  />
+                  <Button
+                    type="button"
+                    variant="outline"
+                    onClick={() => ragFileInputRef.current?.click()}
+                    disabled={isTyping}
+                    title="Upload document for RAG"
+                  >
+                    <Paperclip className="w-4 h-4" />
+                  </Button>
                   <Input
                     placeholder="Ask me anything about taxes, GST, ITR filing..."
                     value={inputMessage}
@@ -362,6 +395,21 @@ export const AITaxAdvisor: React.FC = () => {
                     <Send className="w-4 h-4" />
                   </Button>
                 </div>
+                {selectedRagFile && (
+                  <div className="mt-2 flex items-center justify-between rounded-md bg-blue-500/10 border border-blue-500/20 px-3 py-2 text-xs text-blue-200">
+                    <span className="truncate mr-2">RAG document: {selectedRagFile.name}</span>
+                    <button
+                      type="button"
+                      className="text-blue-300 hover:text-white"
+                      onClick={() => {
+                        setSelectedRagFile(null)
+                        if (ragFileInputRef.current) ragFileInputRef.current.value = ''
+                      }}
+                    >
+                      <X className="w-3 h-3" />
+                    </button>
+                  </div>
+                )}
               </div>
             </CardContent>
           </Card>

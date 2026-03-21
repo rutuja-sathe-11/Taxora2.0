@@ -33,6 +33,7 @@ export const Layout: React.FC<LayoutProps> = ({ children, user, currentView, onV
         { id: 'chat', label: 'Messages', icon: MessageSquare },
         { id: 'tax-filing', label: 'Tax Filing', icon: FileText },
         { id: 'reports', label: 'Reports', icon: BarChart3 },
+        { id: 'compliance-calendar', label: 'Compliance & Notices', icon: FileText },
         { id: 'settings', label: 'Settings', icon: Settings }
       ]
 

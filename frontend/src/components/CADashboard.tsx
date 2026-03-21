@@ -2,7 +2,7 @@ import React, { useState, useEffect } from 'react'
 import { Card, CardHeader, CardTitle, CardContent } from './ui/card'
 import { Button } from './ui/button'
 import { Users, FileText, AlertTriangle, Calendar, TrendingUp, Clock, CheckCircle, XCircle, DollarSign } from 'lucide-react'
-import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, LineChart, Line, PieChart, Pie, Cell } from 'recharts'
+import { BarChart, Bar, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, PieChart, Pie, Cell, AreaChart, Area, Legend } from 'recharts'
 import { formatCurrency } from '../lib/utils'
 import { transactionService } from '../services/transactions'
 import { complianceService } from '../services/compliance'
@@ -141,6 +141,20 @@ export const CADashboard: React.FC = () => {
   const complianceDue = dashboardData.overdue_count || 0
   const monthlyRevenue = dashboardData.monthly_revenue || 0
 
+  const complianceTotals = complianceData.reduce(
+    (acc, item) => {
+      acc.completed += Number(item.completed || 0)
+      acc.pending += Number(item.pending || 0)
+      acc.overdue += Number(item.overdue || 0)
+      return acc
+    },
+    { completed: 0, pending: 0, overdue: 0 }
+  )
+  const totalComplianceItems = complianceTotals.completed + complianceTotals.pending + complianceTotals.overdue
+  const completionRate = totalComplianceItems > 0
+    ? Math.round((complianceTotals.completed / totalComplianceItems) * 100)
+    : 0
+
   if (loading) {
     return (
       <div className="flex justify-center items-center min-h-96">
@@ -225,11 +239,21 @@ export const CADashboard: React.FC = () => {
           <CardContent>
             {clientData.length > 0 ? (
               <ResponsiveContainer width="100%" height={300}>
-                <LineChart data={clientData}>
+                <AreaChart data={clientData}>
+                  <defs>
+                    <linearGradient id="clientsGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#3B82F6" stopOpacity={0.35} />
+                      <stop offset="95%" stopColor="#3B82F6" stopOpacity={0.03} />
+                    </linearGradient>
+                    <linearGradient id="revenueGradient" x1="0" y1="0" x2="0" y2="1">
+                      <stop offset="5%" stopColor="#10B981" stopOpacity={0.35} />
+                      <stop offset="95%" stopColor="#10B981" stopOpacity={0.03} />
+                    </linearGradient>
+                  </defs>
                   <CartesianGrid strokeDasharray="3 3" stroke="#374151" />
                   <XAxis dataKey="month" stroke="#9CA3AF" />
-                  <YAxis yAxisId="clients" orientation="left" stroke="#3B82F6" />
-                  <YAxis yAxisId="revenue" orientation="right" stroke="#059669" />
+                  <YAxis yAxisId="clients" orientation="left" stroke="#60A5FA" width={36} />
+                  <YAxis yAxisId="revenue" orientation="right" stroke="#34D399" width={56} />
                   <Tooltip 
                     contentStyle={{ 
                       backgroundColor: '#1F2937', 
@@ -242,9 +266,10 @@ export const CADashboard: React.FC = () => {
                       name === 'revenue' ? 'Revenue' : 'Clients'
                     ]}
                   />
-                  <Line yAxisId="clients" type="monotone" dataKey="clients" stroke="#3B82F6" strokeWidth={2} />
-                  <Line yAxisId="revenue" type="monotone" dataKey="revenue" stroke="#059669" strokeWidth={2} />
-                </LineChart>
+                  <Legend />
+                  <Area yAxisId="clients" type="monotone" dataKey="clients" stroke="#3B82F6" fill="url(#clientsGradient)" strokeWidth={2} />
+                  <Area yAxisId="revenue" type="monotone" dataKey="revenue" stroke="#10B981" fill="url(#revenueGradient)" strokeWidth={2} />
+                </AreaChart>
               </ResponsiveContainer>
             ) : (
               <div className="flex items-center justify-center h-[300px] text-gray-400">
@@ -266,12 +291,13 @@ export const CADashboard: React.FC = () => {
                     data={revenueData}
                     cx="50%"
                     cy="50%"
-                    outerRadius={80}
+                    innerRadius={58}
+                    outerRadius={92}
                     fill="#8884d8"
                     dataKey="value"
-                    label={({ name, value }) => {
-                      if (value === 0) return name
-                      return `${name}: ${formatCurrency(value)}`
+                    label={({ name, percent, value }) => {
+                      if (!value || value === 0) return name
+                      return `${name} (${Math.round((percent || 0) * 100)}%)`
                     }}
                   >
                     {revenueData.map((entry, index) => (
@@ -287,6 +313,7 @@ export const CADashboard: React.FC = () => {
                     }}
                     formatter={(value) => [formatCurrency(Number(value)), '']}
                   />
+                  <Legend />
                 </PieChart>
               </ResponsiveContainer>
             ) : (
@@ -304,6 +331,25 @@ export const CADashboard: React.FC = () => {
           <CardTitle className="text-white">Client Compliance Status</CardTitle>
         </CardHeader>
         <CardContent>
+          <div className="grid grid-cols-2 md:grid-cols-4 gap-3 mb-4">
+            <div className="rounded-lg bg-green-500/10 border border-green-500/30 p-3">
+              <div className="text-xs text-green-300">Completed</div>
+              <div className="text-lg font-semibold text-white">{complianceTotals.completed}</div>
+            </div>
+            <div className="rounded-lg bg-yellow-500/10 border border-yellow-500/30 p-3">
+              <div className="text-xs text-yellow-300">Pending</div>
+              <div className="text-lg font-semibold text-white">{complianceTotals.pending}</div>
+            </div>
+            <div className="rounded-lg bg-red-500/10 border border-red-500/30 p-3">
+              <div className="text-xs text-red-300">Overdue</div>
+              <div className="text-lg font-semibold text-white">{complianceTotals.overdue}</div>
+            </div>
+            <div className="rounded-lg bg-blue-500/10 border border-blue-500/30 p-3">
+              <div className="text-xs text-blue-300">Completion Rate</div>
+              <div className="text-lg font-semibold text-white">{completionRate}%</div>
+            </div>
+          </div>
+
           {complianceData && complianceData.length > 0 ? (
             <ResponsiveContainer width="100%" height={300}>
               <BarChart data={complianceData} layout="horizontal">
@@ -326,6 +372,7 @@ export const CADashboard: React.FC = () => {
                     return [value, labels[name] || name]
                   }}
                 />
+                <Legend />
                 <Bar dataKey="completed" stackId="a" fill="#059669" />
                 <Bar dataKey="pending" stackId="a" fill="#D97706" />
                 <Bar dataKey="overdue" stackId="a" fill="#DC2626" />

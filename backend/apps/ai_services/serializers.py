@@ -49,3 +49,9 @@ class ChatCreateSerializer(serializers.Serializer):
     context_transactions = serializers.ListField(
         child=serializers.UUIDField(), required=False
     )
+
+
+class RagChatCreateSerializer(serializers.Serializer):
+    message = serializers.CharField(max_length=4000)
+    session_id = serializers.UUIDField(required=False)
+    rag_file = serializers.FileField(required=False)

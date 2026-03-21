@@ -5,6 +5,8 @@ import { Input } from './ui/input'
 import { Send, Plus, Check, X, Clock, AlertCircle } from 'lucide-react'
 import { chatService } from '../services/chat'
 import { authService } from '../services/auth'
+import { complianceService } from '../services/compliance'
+import { useClients } from '../contexts/ClientContext'
 
 interface Message {
   id: string
@@ -37,6 +39,7 @@ interface ConversationListItem {
 
 export const ChatComponent: React.FC = () => {
   const currentUser = authService.getCurrentUser()
+  const { clients } = useClients()
   const [conversations, setConversations] = useState<ConversationListItem[]>([])
   const [selectedConversation, setSelectedConversation] = useState<Conversation | null>(null)
   const [messages, setMessages] = useState<Message[]>([])
@@ -45,7 +48,13 @@ export const ChatComponent: React.FC = () => {
   const [sending, setSending] = useState(false)
   const [error, setError] = useState<string | null>(null)
   const [tab, setTab] = useState<'active' | 'pending' | 'all'>('active')
+  const [selectedAttachment, setSelectedAttachment] = useState<File | null>(null)
+  const [clientReports, setClientReports] = useState<any[]>([])
+  const [mappedClientId, setMappedClientId] = useState<string>('')
+  const [selectedReportId, setSelectedReportId] = useState<string>('')
+  const [sharingReport, setSharingReport] = useState(false)
   const messagesEndRef = useRef<HTMLDivElement>(null)
+  const fileInputRef = useRef<HTMLInputElement>(null)
 
   useEffect(() => {
     loadConversations()
@@ -89,6 +98,22 @@ export const ChatComponent: React.FC = () => {
       const fullConversation = await chatService.getConversation(conversation.id as string)
       setSelectedConversation(fullConversation)
       setMessages(fullConversation.messages || [])
+
+      if (currentUser?.role === 'CA') {
+        const participantEmail = fullConversation.other_participant?.email
+        const matchedClient = clients.find(c => c.email?.toLowerCase() === String(participantEmail || '').toLowerCase())
+        if (matchedClient) {
+          const cid = String(matchedClient.id)
+          setMappedClientId(cid)
+          const reports = await complianceService.getReportsByClient(cid)
+          setClientReports(reports)
+        } else {
+          setMappedClientId('')
+          setClientReports([])
+        }
+        setSelectedReportId('')
+      }
+
       setError(null)
     } catch (err: any) {
       console.error('Error loading conversation:', err)
@@ -101,7 +126,7 @@ export const ChatComponent: React.FC = () => {
   const handleSendMessage = async (e: React.FormEvent) => {
     e.preventDefault()
     
-    if (!messageInput.trim() || !selectedConversation) {
+    if ((!messageInput.trim() && !selectedAttachment) || !selectedConversation) {
       return
     }
 
@@ -113,19 +138,67 @@ export const ChatComponent: React.FC = () => {
 
     try {
       setSending(true)
+      const contentToSend = messageInput.trim() || (selectedAttachment ? `Shared file: ${selectedAttachment.name}` : '')
       const newMessage = await chatService.sendMessage(
         selectedConversation.id as string,
-        messageInput
+        contentToSend,
+        selectedAttachment || undefined,
+        selectedAttachment ? 'document' : undefined
       )
       
       setMessages([...messages, newMessage])
       setMessageInput('')
+      setSelectedAttachment(null)
+      if (fileInputRef.current) {
+        fileInputRef.current.value = ''
+      }
       setError(null)
     } catch (err: any) {
       console.error('Error sending message:', err)
       setError(err.message)
     } finally {
       setSending(false)
+    }
+  }
+
+  const handlePickAttachment = () => {
+    fileInputRef.current?.click()
+  }
+
+  const handleAttachmentChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0]
+    if (!file) return
+    setSelectedAttachment(file)
+    setError(null)
+  }
+
+  const handleShareSelectedReport = async () => {
+    if (!selectedConversation || !selectedReportId) {
+      return
+    }
+
+    try {
+      setSharingReport(true)
+      const report = clientReports.find(r => String(r.id) === selectedReportId)
+      if (!report?.file_url) {
+        throw new Error('Selected report file not available')
+      }
+
+      // Share as a direct secure link message to avoid cross-origin/download re-upload failures.
+      const caption = `Shared report: ${report.report_type || 'report'}\n${report.file_url}`
+      const sent = await chatService.sendMessage(
+        selectedConversation.id as string,
+        caption
+      )
+      setMessages(prev => [...prev, sent])
+      setError(null)
+      setSelectedReportId('')
+    } catch (err: any) {
+      console.error('Error sharing report:', err)
+      const errorMessage = err?.response?.data?.error || err?.response?.data?.detail || err?.message || 'Failed to share report'
+      setError(errorMessage)
+    } finally {
+      setSharingReport(false)
     }
   }
 
@@ -328,6 +401,16 @@ export const ChatComponent: React.FC = () => {
                       }`}
                     >
                       <p className="text-sm">{msg.content}</p>
+                      {msg.attachment && (
+                        <a
+                          href={msg.attachment}
+                          target="_blank"
+                          rel="noopener noreferrer"
+                          className="text-xs underline mt-2 inline-block opacity-90"
+                        >
+                          View attachment
+                        </a>
+                      )}
                       <div className="flex items-center justify-between mt-1 text-xs opacity-70">
                         <span>
                           {new Date(msg.created_at).toLocaleTimeString([], {
@@ -351,7 +434,48 @@ export const ChatComponent: React.FC = () => {
             {/* Message Input */}
             {['active', 'accepted'].includes(selectedConversation.status) ? (
               <div className="border-t border-gray-700 p-4">
+                {currentUser?.role === 'CA' && mappedClientId && clientReports.length > 0 && (
+                  <div className="mb-3 flex gap-2">
+                    <select
+                      value={selectedReportId}
+                      onChange={e => setSelectedReportId(e.target.value)}
+                      className="flex-1 px-3 py-2 bg-gray-800 border border-gray-600 rounded-md text-white text-sm"
+                    >
+                      <option value="">Select report to share...</option>
+                      {clientReports.map(report => (
+                        <option key={report.id} value={String(report.id)}>
+                          {report.report_type} • {new Date(report.created_at).toLocaleDateString()}
+                        </option>
+                      ))}
+                    </select>
+                    <Button
+                      type="button"
+                      onClick={handleShareSelectedReport}
+                      disabled={!selectedReportId || sharingReport}
+                      className="bg-indigo-600 hover:bg-indigo-700 disabled:bg-gray-600"
+                    >
+                      {sharingReport ? 'Sharing...' : 'Share Report'}
+                    </Button>
+                  </div>
+                )}
+
                 <form onSubmit={handleSendMessage} className="flex gap-2">
+                  <input
+                    ref={fileInputRef}
+                    type="file"
+                    className="hidden"
+                    onChange={handleAttachmentChange}
+                  />
+                  {currentUser?.role === 'CA' && (
+                    <Button
+                      type="button"
+                      onClick={handlePickAttachment}
+                      className="bg-gray-700 hover:bg-gray-600"
+                      title="Attach and share document/report"
+                    >
+                      <Plus size={18} />
+                    </Button>
+                  )}
                   <Input
                     type="text"
                     placeholder="Type your message..."
@@ -362,7 +486,7 @@ export const ChatComponent: React.FC = () => {
                   />
                   <Button
                     type="submit"
-                    disabled={sending || !messageInput.trim()}
+                    disabled={sending || (!messageInput.trim() && !selectedAttachment)}
                     className="bg-blue-600 hover:bg-blue-700 disabled:bg-gray-600"
                   >
                     {sending ? (
@@ -372,6 +496,21 @@ export const ChatComponent: React.FC = () => {
                     )}
                   </Button>
                 </form>
+                {selectedAttachment && (
+                  <div className="mt-2 text-xs text-gray-300 flex items-center justify-between bg-gray-800/60 rounded px-2 py-1">
+                    <span className="truncate">Attachment: {selectedAttachment.name}</span>
+                    <button
+                      type="button"
+                      onClick={() => {
+                        setSelectedAttachment(null)
+                        if (fileInputRef.current) fileInputRef.current.value = ''
+                      }}
+                      className="text-red-400 hover:text-red-300"
+                    >
+                      Remove
+                    </button>
+                  </div>
+                )}
               </div>
             ) : selectedConversation.status === 'pending' && currentUser?.role === 'CA' ? (
               <div className="border-t border-gray-700 p-4 flex gap-2">

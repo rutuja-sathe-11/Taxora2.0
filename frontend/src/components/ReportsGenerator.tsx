@@ -17,6 +17,20 @@ interface ReportData {
   transactionCount: number
 }
 
+interface GSTPreviewData {
+  gstCollected: number
+  gstPaid: number
+  netGst: number
+  transactionCount: number
+  period: string
+}
+
+interface GeneratedReportArtifact {
+  fileName: string
+  blob: Blob
+  reportId?: number
+}
+
 export const ReportsGenerator: React.FC = () => {
   const { clients } = useClients()
   const [loading, setLoading] = useState(false)
@@ -26,6 +40,14 @@ export const ReportsGenerator: React.FC = () => {
     endDate: new Date().toISOString().split('T')[0]
   })
   const [selectedClient, setSelectedClient] = useState('all')
+  const [generatedReports, setGeneratedReports] = useState<Record<string, GeneratedReportArtifact>>({})
+  const [gstPreviewData, setGstPreviewData] = useState<GSTPreviewData | null>(null)
+
+  useEffect(() => {
+    if (selectedClient === 'all' && clients.length > 0) {
+      setSelectedClient(String(clients[0].id))
+    }
+  }, [clients, selectedClient])
 
   useEffect(() => {
     loadReportData()
@@ -51,11 +73,34 @@ export const ReportsGenerator: React.FC = () => {
       }
       
       setReportData(safeSummary)
+
+      // Load client-specific GST preview for report cards so values reflect real GSTR-3B data.
+      if (selectedClient !== 'all') {
+        try {
+          const period = `${new Date(dateRange.startDate).getFullYear()}-${String(new Date(dateRange.startDate).getMonth() + 1).padStart(2, '0')}`
+          const gst = await complianceService.generateClientGSTR3B(selectedClient, period)
+          const collected = Number(gst?.tax_liability?.output_tax ?? 0) || 0
+          const paid = Number(gst?.tax_liability?.input_tax_credit ?? 0) || 0
+          const net = Number(gst?.tax_liability?.net_tax_payable ?? (collected - paid)) || 0
+          setGstPreviewData({
+            gstCollected: collected,
+            gstPaid: paid,
+            netGst: net,
+            transactionCount: Number(gst?.transaction_count ?? 0) || 0,
+            period: String(gst?.period ?? period),
+          })
+        } catch (gstError) {
+          console.warn('Could not load GST preview for selected client:', gstError)
+          setGstPreviewData(null)
+        }
+      } else {
+        setGstPreviewData(null)
+      }
     } catch (error) {
       console.error('Error loading report data:', error)
       // Generate data based on selected client or use fallback
       const selectedClientData = selectedClient !== 'all' 
-        ? clients.find(c => c.id === selectedClient)
+        ? clients.find(c => String(c.id) === selectedClient)
         : null
       
       const fallbackData: ReportData = {
@@ -67,12 +112,201 @@ export const ReportsGenerator: React.FC = () => {
         transactionCount: selectedClientData?.totalTransactions || 45
       }
       setReportData(fallbackData)
+      setGstPreviewData(null)
     } finally {
       setLoading(false)
     }
   }
 
   const generateReport = async (reportType: string) => {
+    if (reportType === 'profit-loss') {
+      if (selectedClient === 'all') {
+        alert('Please select a specific client to generate P&L report')
+        return
+      }
+
+      setLoading(true)
+      try {
+        const pnl = await complianceService.generatePnLReport(selectedClient)
+        let generated = false
+        if (pnl.file_url) {
+          // Best-effort local download; sharing should continue even if this fails.
+          try {
+            const token = localStorage.getItem('accessToken')
+            const fileResponse = await fetch(pnl.file_url, {
+              headers: token ? { Authorization: `Bearer ${token}` } : undefined
+            })
+            if (fileResponse.ok) {
+              const fileBlob = await fileResponse.blob()
+              const fileUrl = URL.createObjectURL(fileBlob)
+              const fileName = `pnl-${selectedClient}-${new Date().toISOString().slice(0, 10)}.xlsx`
+              const a = document.createElement('a')
+              a.href = fileUrl
+              a.download = fileName
+              a.click()
+              URL.revokeObjectURL(fileUrl)
+              setGeneratedReports(prev => ({
+                ...prev,
+                'profit-loss': {
+                  fileName,
+                  blob: fileBlob,
+                  reportId: pnl.report_id,
+                },
+              }))
+              generated = true
+            }
+          } catch (downloadError) {
+            console.warn('P&L file download failed; proceeding with client share:', downloadError)
+          }
+        }
+
+        // If backend file download failed, still generate a local CSV from summary data.
+        if (!generated) {
+          const csvRows = [
+            ['Metric', 'Amount'],
+            ['Total Income', String(reportData?.totalIncome || 0)],
+            ['Total Expenses', String(reportData?.totalExpenses || 0)],
+            ['Net Profit', String(reportData?.netProfit || 0)],
+            ['Period Start', dateRange.startDate],
+            ['Period End', dateRange.endDate],
+          ]
+          const csvContent = csvRows.map(r => r.join(',')).join('\n')
+          const blob = new Blob([csvContent], { type: 'text/csv' })
+          const url = URL.createObjectURL(blob)
+          const fileName = `profit-loss-${dateRange.startDate}-to-${dateRange.endDate}.csv`
+          const a = document.createElement('a')
+          a.href = url
+          a.download = fileName
+          a.click()
+          URL.revokeObjectURL(url)
+          setGeneratedReports(prev => ({
+            ...prev,
+            'profit-loss': {
+              fileName,
+              blob,
+              reportId: pnl.report_id,
+            },
+          }))
+          generated = true
+        }
+
+        if (generated) {
+          alert('P&L report generated successfully! Use "Share with Client" to send it.')
+        }
+      } catch (error) {
+        console.error('Error generating/sharing P&L report:', error)
+        // Final fallback: always generate a local CSV if server generation fails.
+        const fallbackRows = [
+          ['Metric', 'Amount'],
+          ['Total Income', String(reportData?.totalIncome || 0)],
+          ['Total Expenses', String(reportData?.totalExpenses || 0)],
+          ['Net Profit', String(reportData?.netProfit || 0)],
+          ['Period Start', dateRange.startDate],
+          ['Period End', dateRange.endDate],
+        ]
+        const fallbackCsv = fallbackRows.map(r => r.join(',')).join('\n')
+        const fallbackBlob = new Blob([fallbackCsv], { type: 'text/csv' })
+        const fallbackUrl = URL.createObjectURL(fallbackBlob)
+        const fallbackFileName = `profit-loss-${dateRange.startDate}-to-${dateRange.endDate}.csv`
+        const a = document.createElement('a')
+        a.href = fallbackUrl
+        a.download = fallbackFileName
+        a.click()
+        URL.revokeObjectURL(fallbackUrl)
+        setGeneratedReports(prev => ({
+          ...prev,
+          'profit-loss': {
+            fileName: fallbackFileName,
+            blob: fallbackBlob,
+          },
+        }))
+        alert('Server P&L generation failed, fallback P&L CSV generated successfully.')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
+    if (reportType === 'balance-sheet') {
+      setLoading(true)
+      try {
+        const assets = Number(reportData?.totalIncome || 0)
+        const liabilities = Number(reportData?.totalExpenses || 0)
+        const equity = assets - liabilities
+        const rows = [
+          ['Section', 'Item', 'Amount'],
+          ['Assets', 'Total Assets', String(assets)],
+          ['Liabilities', 'Total Liabilities', String(liabilities)],
+          ['Equity', 'Owner Equity', String(equity)],
+          ['Meta', 'Period Start', dateRange.startDate],
+          ['Meta', 'Period End', dateRange.endDate],
+        ]
+        const csv = rows.map(r => r.join(',')).join('\n')
+        const blob = new Blob([csv], { type: 'text/csv' })
+        const url = URL.createObjectURL(blob)
+        const fileName = `balance-sheet-${dateRange.startDate}-to-${dateRange.endDate}.csv`
+        const a = document.createElement('a')
+        a.href = url
+        a.download = fileName
+        a.click()
+        URL.revokeObjectURL(url)
+        setGeneratedReports(prev => ({
+          ...prev,
+          'balance-sheet': {
+            fileName,
+            blob,
+          },
+        }))
+        alert('Balance Sheet generated successfully!')
+      } catch (error) {
+        console.error('Error generating balance sheet:', error)
+        alert('Failed to generate balance sheet')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
+    if (reportType === 'cash-flow') {
+      setLoading(true)
+      try {
+        const inflow = Number(reportData?.totalIncome || 0)
+        const outflow = Number(reportData?.totalExpenses || 0)
+        const net = inflow - outflow
+        const rows = [
+          ['Section', 'Amount'],
+          ['Cash Inflow (Operating)', String(inflow)],
+          ['Cash Outflow (Operating)', String(outflow)],
+          ['Net Cash Flow', String(net)],
+          ['Period Start', dateRange.startDate],
+          ['Period End', dateRange.endDate],
+        ]
+        const csv = rows.map(r => r.join(',')).join('\n')
+        const blob = new Blob([csv], { type: 'text/csv' })
+        const url = URL.createObjectURL(blob)
+        const fileName = `cash-flow-${dateRange.startDate}-to-${dateRange.endDate}.csv`
+        const a = document.createElement('a')
+        a.href = url
+        a.download = fileName
+        a.click()
+        URL.revokeObjectURL(url)
+        setGeneratedReports(prev => ({
+          ...prev,
+          'cash-flow': {
+            fileName,
+            blob,
+          },
+        }))
+        alert('Cash Flow statement generated successfully!')
+      } catch (error) {
+        console.error('Error generating cash flow statement:', error)
+        alert('Failed to generate cash flow statement')
+      } finally {
+        setLoading(false)
+      }
+      return
+    }
+
     setLoading(true)
     try {
       const response = await transactionService.exportTransactions({
@@ -96,27 +330,24 @@ export const ReportsGenerator: React.FC = () => {
       }
       
       const url = URL.createObjectURL(blob)
+      const fileName = `${reportType}-report-${dateRange.startDate}-to-${dateRange.endDate}.csv`
       const a = document.createElement('a')
       a.href = url
-      a.download = `${reportType}-report-${dateRange.startDate}-to-${dateRange.endDate}.csv`
+      a.download = fileName
       a.click()
       URL.revokeObjectURL(url)
+      setGeneratedReports(prev => ({
+        ...prev,
+        [reportType]: {
+          fileName,
+          blob,
+        },
+      }))
       
       alert(`${reportType} report generated successfully!`)
     } catch (error) {
       console.error(`Error generating ${reportType} report:`, error)
-      // Generate mock CSV data
-      const mockData = generateMockReportData(reportType)
-      const csvContent = convertToCSV(mockData)
-      const blob = new Blob([csvContent], { type: 'text/csv' })
-      const url = URL.createObjectURL(blob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `${reportType}-report-${dateRange.startDate}-to-${dateRange.endDate}.csv`
-      a.click()
-      URL.revokeObjectURL(url)
-      
-      alert(`${reportType} report generated with sample data!`)
+      alert(`Failed to generate ${reportType} report`)
     } finally {
       setLoading(false)
     }
@@ -168,68 +399,100 @@ export const ReportsGenerator: React.FC = () => {
   }
 
   const generateGSTSummary = async () => {
+    if (selectedClient === 'all') {
+      alert('Please select a specific client to generate GST summary')
+      return
+    }
+
     setLoading(true)
     try {
-      const period = `${new Date(dateRange.startDate).getMonth() + 1}-${new Date(dateRange.startDate).getFullYear()}`
-      const gstData = await complianceService.generateGSTR3B(period)
-      
-      // Create a downloadable JSON file with GST data
-      const dataStr = JSON.stringify(gstData, null, 2)
-      const dataBlob = new Blob([dataStr], { type: 'application/json' })
+      const period = `${new Date(dateRange.startDate).getFullYear()}-${String(new Date(dateRange.startDate).getMonth() + 1).padStart(2, '0')}`
+      const gstData = await complianceService.generateClientGSTR3B(selectedClient, period)
+
+      // Build a client-specific GST summary CSV from backend computed values.
+      const rows = [
+        ['Client ID', String(gstData.client_id ?? selectedClient)],
+        ['Period', String(gstData.period ?? period)],
+        ['Transaction Count', String(gstData.transaction_count ?? 0)],
+        [],
+        ['Outward Supplies', 'Amount'],
+        ['Taxable Value', String(gstData.outward_supplies?.taxable_value ?? 0)],
+        ['Output Tax', String(gstData.outward_supplies?.output_tax ?? gstData.tax_liability?.output_tax ?? 0)],
+        [],
+        ['Inward Supplies', 'Amount'],
+        ['Taxable Value', String(gstData.inward_supplies?.taxable_value ?? 0)],
+        ['Input Tax Credit', String(gstData.inward_supplies?.input_tax ?? gstData.tax_liability?.input_tax_credit ?? 0)],
+        [],
+        ['Tax Liability', 'Amount'],
+        ['Output Tax', String(gstData.tax_liability?.output_tax ?? 0)],
+        ['Input Tax Credit', String(gstData.tax_liability?.input_tax_credit ?? 0)],
+        ['Net Tax Payable', String(gstData.tax_liability?.net_tax_payable ?? 0)],
+      ]
+      const csvContent = rows.map(r => r.join(',')).join('\n')
+      const dataBlob = new Blob([csvContent], { type: 'text/csv' })
       const url = URL.createObjectURL(dataBlob)
+      const fileName = `gst-summary-${period}-${selectedClient}.csv`
       const a = document.createElement('a')
       a.href = url
-      a.download = `gst-summary-${period}.json`
+      a.download = fileName
       a.click()
       URL.revokeObjectURL(url)
+
+      setGeneratedReports(prev => ({
+        ...prev,
+        'gst-summary': {
+          fileName,
+          blob: dataBlob,
+        },
+      }))
       
-      alert('GST summary generated successfully!')
+      alert('GST summary generated successfully from selected client data!')
     } catch (error) {
       console.error('Error generating GST summary:', error)
-      // Generate mock GST data
-      const mockGSTData = {
-        period: `${new Date(dateRange.startDate).getMonth() + 1}-${new Date(dateRange.startDate).getFullYear()}`,
-        gstin: "27AABCU9603R1ZX",
-        business_name: "Sample Business",
-        outward_supplies: {
-          taxable_value: 150000,
-          cgst: 13500,
-          sgst: 13500,
-          igst: 0,
-          cess: 0
-        },
-        inward_supplies: {
-          taxable_value: 80000,
-          cgst: 7200,
-          sgst: 7200,
-          igst: 0,
-          cess: 0
-        },
-        input_tax_credit: {
-          cgst: 7200,
-          sgst: 7200,
-          igst: 0,
-          cess: 0
-        },
-        net_tax_payable: {
-          cgst: 6300,
-          sgst: 6300,
-          igst: 0,
-          cess: 0
-        }
+      alert('Failed to generate GST summary')
+    } finally {
+      setLoading(false)
+    }
+  }
+
+  const shareGeneratedReport = async (reportType: string, reportTitle: string) => {
+    if (selectedClient === 'all') {
+      alert('Please select a specific client to share this report')
+      return
+    }
+
+    const generated = generatedReports[reportType]
+    if (!generated) {
+      alert('Please generate the report first before sharing')
+      return
+    }
+
+    setLoading(true)
+    try {
+      // If backend report id exists (P&L path), share by report_id.
+      if (generated.reportId) {
+        await complianceService.sendMessage({
+          client_id: selectedClient,
+          message_text: `Please find attached the latest ${reportTitle}.`,
+          report_id: generated.reportId,
+        })
+      } else {
+        // Share generated local file as attachment.
+        const formData = new FormData()
+        formData.append('client_id', selectedClient)
+        formData.append('message_text', `Please find attached the latest ${reportTitle}.`)
+        const attachment = new File([generated.blob], generated.fileName, {
+          type: generated.blob.type || 'application/octet-stream',
+        })
+        formData.append('file_attachment', attachment)
+        await complianceService.sendMessage(formData)
       }
-      
-      const period = `${new Date(dateRange.startDate).getMonth() + 1}-${new Date(dateRange.startDate).getFullYear()}`
-      const dataStr = JSON.stringify(mockGSTData, null, 2)
-      const dataBlob = new Blob([dataStr], { type: 'application/json' })
-      const url = URL.createObjectURL(dataBlob)
-      const a = document.createElement('a')
-      a.href = url
-      a.download = `gst-summary-${period}.json`
-      a.click()
-      URL.revokeObjectURL(url)
-      
-      alert('GST summary generated with sample data!')
+
+      alert(`${reportTitle} shared with client successfully!`)
+    } catch (error: any) {
+      console.error(`Error sharing ${reportType}:`, error)
+      const errorMessage = error?.response?.data?.error || error?.response?.data?.detail || error?.message || `Failed to share ${reportTitle}`
+      alert(errorMessage)
     } finally {
       setLoading(false)
     }
@@ -320,7 +583,7 @@ export const ReportsGenerator: React.FC = () => {
               >
                 <option value="all">All Clients</option>
                 {clients.map(client => (
-                  <option key={client.id} value={client.id}>
+                  <option key={String(client.id)} value={String(client.id)}>
                     {client.businessName} ({client.name})
                   </option>
                 ))}
@@ -367,6 +630,23 @@ export const ReportsGenerator: React.FC = () => {
       <div className="grid grid-cols-1 md:grid-cols-2 gap-6">
         {reportTypes.map((report) => {
           const Icon = report.icon
+          const totalIncome = Number(reportData?.totalIncome || 0)
+          const totalExpenses = Number(reportData?.totalExpenses || 0)
+          const netProfit = Number(reportData?.netProfit || 0)
+
+          // Lightweight derived values for dashboard visibility
+          const balanceAssets = totalIncome
+          const balanceLiabilities = totalExpenses
+          const balanceEquity = balanceAssets - balanceLiabilities
+
+          const operatingInflow = totalIncome
+          const operatingOutflow = totalExpenses
+          const netCashFlow = operatingInflow - operatingOutflow
+
+          const gstCollectedDisplay = Number(gstPreviewData?.gstCollected ?? reportData?.gstCollected ?? 0)
+          const gstPaidDisplay = Number(gstPreviewData?.gstPaid ?? reportData?.gstPaid ?? 0)
+          const netGstDisplay = Number(gstPreviewData?.netGst ?? (gstCollectedDisplay - gstPaidDisplay))
+
           return (
             <Card key={report.id} className={getColorClasses(report.color)}>
               <CardHeader>
@@ -406,22 +686,73 @@ export const ReportsGenerator: React.FC = () => {
                       <Eye className="w-4 h-4 mr-2" />
                       Preview
                     </Button>
+                    <Button
+                      variant="outline"
+                      disabled={loading || selectedClient === 'all' || !generatedReports[report.id]}
+                      onClick={() => shareGeneratedReport(report.id, report.title)}
+                    >
+                      Share with Client
+                    </Button>
                   </div>
                   
                   {report.id === 'profit-loss' && reportData && (
                     <div className="bg-gray-800/50 rounded-lg p-3 space-y-2">
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-400">Revenue:</span>
-                        <span className="text-green-400">{formatCurrency(reportData.totalIncome)}</span>
+                        <span className="text-green-400">{formatCurrency(totalIncome)}</span>
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-400">Expenses:</span>
-                        <span className="text-red-400">{formatCurrency(reportData.totalExpenses)}</span>
+                        <span className="text-red-400">{formatCurrency(totalExpenses)}</span>
                       </div>
                       <div className="flex justify-between text-sm border-t border-gray-700 pt-2">
                         <span className="text-white font-medium">Net Profit:</span>
-                        <span className={`font-medium ${reportData.netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
-                          {formatCurrency(reportData.netProfit)}
+                        <span className={`font-medium ${netProfit >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {formatCurrency(netProfit)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {report.id === 'balance-sheet' && reportData && (
+                    <div className="bg-gray-800/50 rounded-lg p-3 space-y-2">
+                      <div className="text-xs text-gray-400 border-b border-gray-700 pb-2 mb-2">
+                        Snapshot as on {dateRange.endDate}
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-400">Total Assets:</span>
+                        <span className="text-blue-400">{formatCurrency(balanceAssets)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-400">Total Liabilities:</span>
+                        <span className="text-red-400">{formatCurrency(balanceLiabilities)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm border-t border-gray-700 pt-2">
+                        <span className="text-white font-medium">Owner Equity:</span>
+                        <span className={`font-medium ${balanceEquity >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {formatCurrency(balanceEquity)}
+                        </span>
+                      </div>
+                    </div>
+                  )}
+
+                  {report.id === 'cash-flow' && reportData && (
+                    <div className="bg-gray-800/50 rounded-lg p-3 space-y-2">
+                      <div className="text-xs text-gray-400 border-b border-gray-700 pb-2 mb-2">
+                        Period: {dateRange.startDate} to {dateRange.endDate}
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-400">Operating Inflow:</span>
+                        <span className="text-green-400">{formatCurrency(operatingInflow)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-400">Operating Outflow:</span>
+                        <span className="text-red-400">{formatCurrency(operatingOutflow)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm border-t border-gray-700 pt-2">
+                        <span className="text-white font-medium">Net Cash Flow:</span>
+                        <span className={`font-medium ${netCashFlow >= 0 ? 'text-green-400' : 'text-red-400'}`}>
+                          {formatCurrency(netCashFlow)}
                         </span>
                       </div>
                     </div>
@@ -429,18 +760,27 @@ export const ReportsGenerator: React.FC = () => {
 
                   {report.id === 'gst-summary' && reportData && (
                     <div className="bg-gray-800/50 rounded-lg p-3 space-y-2">
+                      {gstPreviewData && (
+                        <div className="text-xs text-gray-400 border-b border-gray-700 pb-2 mb-2">
+                          Period: {gstPreviewData.period} • Transactions: {gstPreviewData.transactionCount}
+                        </div>
+                      )}
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-400">GST Collected:</span>
-                        <span className="text-green-400">{formatCurrency(reportData.gstCollected || 0)}</span>
+                        <span className="text-green-400">{formatCurrency(gstCollectedDisplay)}</span>
                       </div>
                       <div className="flex justify-between text-sm">
                         <span className="text-gray-400">GST Paid:</span>
-                        <span className="text-red-400">{formatCurrency(reportData.gstPaid || 0)}</span>
+                        <span className="text-red-400">{formatCurrency(gstPaidDisplay)}</span>
+                      </div>
+                      <div className="flex justify-between text-sm">
+                        <span className="text-gray-400">Transactions:</span>
+                        <span className="text-white">{gstPreviewData?.transactionCount ?? reportData.transactionCount ?? 0}</span>
                       </div>
                       <div className="flex justify-between text-sm border-t border-gray-700 pt-2">
                         <span className="text-white font-medium">Net GST:</span>
                         <span className="text-blue-400 font-medium">
-                          {formatCurrency((reportData.gstCollected || 0) - (reportData.gstPaid || 0))}
+                          {formatCurrency(netGstDisplay)}
                         </span>
                       </div>
                     </div>

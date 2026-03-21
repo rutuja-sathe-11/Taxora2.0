@@ -14,6 +14,7 @@ import { DocumentManager } from './components/DocumentManager'
 import { CAConnect } from './components/CAConnect'
 import { Settings } from './components/Settings'
 import { ChatComponent } from './components/Chat'
+import { ComplianceCenter } from './components/ComplianceCenter'
 import { ResetPassword } from './components/ResetPassword'
 import { authService } from './services/auth'
 import { User } from './types'
@@ -135,7 +136,7 @@ function App() {
         return user.role === 'CA' ? <ReportsGenerator /> : <div className="text-white">Access Denied</div>
       
       case 'compliance-calendar':
-        return <div className="text-white">Compliance Calendar Coming Soon</div>
+        return user.role === 'CA' ? <ComplianceCenter /> : <div className="text-white">Access Denied</div>
       
       default:
         return user.role === 'SME' ? <SMEDashboard /> : <CADashboard />

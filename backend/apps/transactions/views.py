@@ -19,6 +19,34 @@ from datetime import datetime, timedelta
 from django.utils import timezone
 from calendar import month_abbr
 
+
+def _resolve_ca_client_user(ca_user, client_identifier):
+    from apps.users.models import ClientRelationship
+    from django.contrib.auth import get_user_model
+
+    User = get_user_model()
+    normalized = str(client_identifier).strip()
+
+    # 1) Direct SME user id (UUID string)
+    try:
+        client_user = User.objects.get(id=normalized, role='SME')
+        relationship = ClientRelationship.objects.get(ca=ca_user, sme=client_user, is_active=True)
+        return client_user
+    except (User.DoesNotExist, ClientRelationship.DoesNotExist, ValueError, TypeError):
+        pass
+
+    # 2) Relationship numeric id
+    if normalized.isdigit():
+        relationship = ClientRelationship.objects.filter(
+            id=int(normalized),
+            ca=ca_user,
+            is_active=True,
+        ).select_related('sme').first()
+        if relationship and relationship.sme and relationship.sme.role == 'SME':
+            return relationship.sme
+
+    return None
+
 class TransactionListCreateView(generics.ListCreateAPIView):
     permission_classes = [permissions.IsAuthenticated]
     
@@ -102,20 +130,11 @@ def transaction_summary(request):
     # Determine which transactions to query
     if request.user.role == 'CA' and client_id:
         # CA accessing specific client data
-        from apps.users.models import ClientRelationship
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        try:
-            client_user = User.objects.get(id=client_id, role='SME')
-            client_rel = ClientRelationship.objects.get(
-                ca=request.user,
-                sme=client_user,
-                is_active=True
-            )
-            user_transactions = Transaction.objects.filter(user=client_user)
-        except (ClientRelationship.DoesNotExist, User.DoesNotExist):
+        client_user = _resolve_ca_client_user(request.user, client_id)
+        if not client_user:
             return Response({'error': 'Client not found or access denied'}, 
                            status=status.HTTP_404_NOT_FOUND)
+        user_transactions = Transaction.objects.filter(user=client_user)
     elif request.user.role == 'CA' and not client_id:
         # CA viewing all clients' data
         from apps.users.models import ClientRelationship
@@ -183,14 +202,19 @@ def transaction_summary(request):
     tds_result = user_transactions.aggregate(total=Sum('tds_amount'))
     tds_total = float(tds_result['total'] or 0)
     
-    # Calculate monthly revenue (current month, approved transactions only)
-    from django.utils import timezone
-    month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    monthly_revenue = user_transactions.filter(
+    # Calculate monthly revenue based on latest month with income data (excluding rejected)
+    income_scope = user_transactions.filter(
         type='income',
-        status='approved',
-        date__gte=month_start
-    ).aggregate(total=Sum('amount'))['total'] or 0
+        status__in=['pending', 'flagged', 'approved'],
+    )
+    latest_income_date = income_scope.order_by('-date').values_list('date', flat=True).first()
+    if latest_income_date:
+        monthly_revenue = income_scope.filter(
+            date__year=latest_income_date.year,
+            date__month=latest_income_date.month,
+        ).aggregate(total=Sum('amount'))['total'] or 0
+    else:
+        monthly_revenue = 0
     
     summary_data = {
         'total_income': income_sum,
@@ -217,20 +241,11 @@ def export_transactions(request):
     # Determine which transactions to query
     if request.user.role == 'CA' and client_id:
         # CA accessing specific client data
-        from apps.users.models import ClientRelationship
-        from django.contrib.auth import get_user_model
-        User = get_user_model()
-        try:
-            client_user = User.objects.get(id=client_id, role='SME')
-            client_rel = ClientRelationship.objects.get(
-                ca=request.user,
-                sme=client_user,
-                is_active=True
-            )
-            queryset = Transaction.objects.filter(user=client_user).order_by('-date')
-        except (ClientRelationship.DoesNotExist, User.DoesNotExist):
+        client_user = _resolve_ca_client_user(request.user, client_id)
+        if not client_user:
             return Response({'error': 'Client not found or access denied'}, 
                            status=status.HTTP_404_NOT_FOUND)
+        queryset = Transaction.objects.filter(user=client_user).order_by('-date')
     elif request.user.role == 'CA' and not client_id:
         # CA viewing all clients' data
         from apps.users.models import ClientRelationship
@@ -403,14 +418,19 @@ def ca_dashboard_summary(request):
     total_clients = client_relationships.count()
     pending_reviews = all_transactions.filter(status__in=['pending', 'flagged']).count()
     
-    # Monthly revenue (current month, approved transactions only)
-    from django.utils import timezone
-    month_start = timezone.now().replace(day=1, hour=0, minute=0, second=0, microsecond=0)
-    monthly_revenue = all_transactions.filter(
+    # Monthly revenue based on latest month with income data (excluding rejected)
+    income_scope = all_transactions.filter(
         type='income',
-        status='approved',
-        date__gte=month_start
-    ).aggregate(total=Sum('amount'))['total'] or 0
+        status__in=['pending', 'flagged', 'approved'],
+    )
+    latest_income_date = income_scope.order_by('-date').values_list('date', flat=True).first()
+    if latest_income_date:
+        monthly_revenue = income_scope.filter(
+            date__year=latest_income_date.year,
+            date__month=latest_income_date.month,
+        ).aggregate(total=Sum('amount'))['total'] or 0
+    else:
+        monthly_revenue = 0
     
     # Total transactions
     total_transactions = all_transactions.count()

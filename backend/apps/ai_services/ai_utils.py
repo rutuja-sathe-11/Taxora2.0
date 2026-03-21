@@ -364,6 +364,27 @@ class AITaxAdvisor:
                 prompt += f"Business Info:\n"
                 prompt += f"- Business: {business.get('name', 'N/A')}\n"
                 prompt += f"- GST Number: {business.get('gst_number', 'N/A')}\n\n"
+
+            if context.get('rag_sources'):
+                prompt += "Document Sources:\n"
+                for src in context.get('rag_sources', []):
+                    prompt += f"- {src}\n"
+                prompt += "\n"
+
+            if context.get('rag_context'):
+                prompt += "Retrieved Document Evidence (use these snippets as primary evidence):\n"
+                for idx, item in enumerate(context.get('rag_context', [])[:6], start=1):
+                    source = item.get('source', 'Uploaded Document')
+                    snippet = item.get('snippet', '')
+                    prompt += f"[{idx}] Source: {source}\n"
+                    prompt += f"Snippet: {snippet}\n\n"
+
+                prompt += (
+                    "Grounding rules:\n"
+                    "1) Answer using the retrieved document evidence first.\n"
+                    "2) If evidence is missing, clearly say what is missing.\n"
+                    "3) Do not invent figures not present in snippets.\n\n"
+                )
         
         prompt += "Please provide specific, actionable advice considering Indian tax laws."
         return prompt

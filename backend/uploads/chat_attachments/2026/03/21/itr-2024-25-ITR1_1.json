@@ -1,0 +1,24 @@
+{
+  "client_id": 1,
+  "assessment_year": "2024-25",
+  "pan": "AAAAA0000A",
+  "income_breakdown": {
+    "salary": 2400000,
+    "business": 0,
+    "other": 0,
+    "total_income": 2400000
+  },
+  "deductions": {
+    "80C": 56000,
+    "80D": 7889,
+    "others": 0,
+    "total_deductions": 63889
+  },
+  "taxable_income": 2336111,
+  "tax_payable": 416866.63,
+  "tds_paid": 120000,
+  "refund_or_payable": {
+    "refund": 0,
+    "payable": 296866.63
+  }
+}
